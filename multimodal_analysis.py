@@ -15,8 +15,9 @@ import threading
 from typing import Dict, Any, Optional
 import warnings
 
-# Import voice analyzer
+# Import voice analyzer and speech transcriber
 from voice_analyzer import VoiceAnalyzer
+from speech_transcriber import SpeechTranscriber
 
 # Suppress warnings
 warnings.filterwarnings('ignore', category=UserWarning)
@@ -308,11 +309,11 @@ def record_video_emotions() -> Dict[str, Any]:
         "frame_count": frame_count
     }
 
-# ---------- Audio Voice Analysis ----------
-def record_audio_analysis() -> Dict[str, Any]:
+# ---------- Audio Voice Analysis with Transcription ----------
+def record_audio_analysis_with_transcription() -> Dict[str, Any]:
     """
-    Record audio for 15 seconds and analyze voice
-    Returns dictionary with voice analysis data
+    Record audio for 15 seconds, analyze voice, and transcribe speech
+    Returns dictionary with voice analysis and transcription data
     """
     try:
         print("🎤 Recording audio...")
@@ -324,10 +325,39 @@ def record_audio_analysis() -> Dict[str, Any]:
         
         # Analyze audio
         print("🔊 Analyzing voice...")
-        results = analyzer.analyze_recorded_audio(audio_data)
+        voice_results = analyzer.analyze_recorded_audio(audio_data)
         
-        print("✅ Audio analysis complete!")
-        return results
+        # Transcribe speech
+        print("📝 Transcribing speech...")
+        try:
+            # Use credentials.json file in the project directory
+            transcriber = SpeechTranscriber(credentials_path="credentials.json")
+            transcription_results = transcriber.transcribe_audio_data(audio_data, sample_rate=22050)
+            
+            # Combine voice analysis and transcription results
+            combined_results = {
+                **voice_results,
+                "transcription": transcription_results
+            }
+            
+            print("✅ Audio analysis and transcription complete!")
+            return combined_results
+            
+        except Exception as e:
+            print(f"⚠️  Speech transcription failed: {str(e)}")
+            print("   Continuing with voice analysis only...")
+            
+            # Return voice analysis without transcription
+            return {
+                **voice_results,
+                "transcription": {
+                    "transcription": "",
+                    "confidence": 0.0,
+                    "success": False,
+                    "error": str(e),
+                    "word_count": 0
+                }
+            }
         
     except Exception as e:
         print(f"❌ Audio analysis failed: {str(e)}")
@@ -336,11 +366,11 @@ def record_audio_analysis() -> Dict[str, Any]:
 # ---------- Combined Analysis ----------
 def format_combined_results(emotion_data: Dict[str, Any], voice_data: Dict[str, Any]):
     """
-    Display combined emotion and voice analysis results
+    Display combined emotion, voice analysis, and transcription results
     """
     print("\n" + "="*70)
     print("           MULTIMODAL ANALYSIS RESULTS")
-    print("           (Emotion + Voice Analysis)")
+    print("           (Emotion + Voice + Speech Transcription)")
     print("="*70)
     
     # ========== EMOTION ANALYSIS ==========
@@ -437,6 +467,38 @@ def format_combined_results(emotion_data: Dict[str, Any], voice_data: Dict[str, 
     else:
         print(f"   ❌ Error: {voice_data['error']}")
     
+    # ========== SPEECH TRANSCRIPTION ==========
+    print(f"\n{'='*70}")
+    print("📝 SPEECH TRANSCRIPTION")
+    print(f"{'='*70}")
+    
+    transcription_data = voice_data.get("transcription", {})
+    if transcription_data.get("success", False):
+        print(f"\n📝 TRANSCRIPTION:")
+        print(f"   Text: \"{transcription_data['transcription']}\"")
+        print(f"   Confidence: {transcription_data['confidence']:.1%}")
+        print(f"   Word Count: {transcription_data['word_count']}")
+        print(f"   Language: {transcription_data.get('language_code', 'en-US')}")
+        
+        if transcription_data.get("enhanced_model"):
+            print(f"   Model: Enhanced")
+        
+        # Show word-level timing if available
+        if "words" in transcription_data and transcription_data["words"]:
+            print(f"\n⏱️  WORD TIMING:")
+            for i, word_info in enumerate(transcription_data["words"][:10]):  # Show first 10 words
+                start_time = word_info.get("start_time", 0)
+                end_time = word_info.get("end_time", 0)
+                confidence = word_info.get("confidence", 0)
+                print(f"   {i+1:2d}. '{word_info['word']}' ({start_time:.1f}s-{end_time:.1f}s, {confidence:.1%})")
+            
+            if len(transcription_data["words"]) > 10:
+                print(f"   ... and {len(transcription_data['words']) - 10} more words")
+    else:
+        print(f"\n❌ TRANSCRIPTION FAILED:")
+        print(f"   Error: {transcription_data.get('error', 'Unknown error')}")
+        print(f"   Success: {transcription_data.get('success', False)}")
+    
     # ========== CORRELATION INSIGHTS ==========
     if "error" not in emotion_data and "error" not in voice_data and all_emotions:
         print(f"\n{'='*70}")
@@ -468,7 +530,30 @@ def format_combined_results(emotion_data: Dict[str, Any], voice_data: Dict[str, 
         elif stability_percentage < 50 and voice_dynamics in ["expressive", "highly expressive"]:
             print(f"   • Variable emotions match expressive vocal style")
         
-        print(f"\n   Overall: Your facial expressions and voice characteristics")
+        # Speech content analysis
+        if transcription_data.get("success", False):
+            transcript = transcription_data['transcription'].lower()
+            word_count = transcription_data['word_count']
+            
+            print(f"\n🗣️  SPEECH CONTENT ANALYSIS:")
+            print(f"   • Spoke {word_count} words in {RECORDING_DURATION} seconds")
+            print(f"   • Speaking rate: {word_count / RECORDING_DURATION:.1f} words/second")
+            
+            # Analyze emotional content in speech
+            positive_words = ['happy', 'good', 'great', 'wonderful', 'amazing', 'excellent', 'fantastic']
+            negative_words = ['sad', 'bad', 'terrible', 'awful', 'horrible', 'disappointed', 'angry']
+            
+            positive_count = sum(1 for word in positive_words if word in transcript)
+            negative_count = sum(1 for word in negative_words if word in transcript)
+            
+            if positive_count > negative_count:
+                print(f"   • Speech content appears positive ({positive_count} positive words)")
+            elif negative_count > positive_count:
+                print(f"   • Speech content appears negative ({negative_count} negative words)")
+            else:
+                print(f"   • Speech content appears neutral")
+        
+        print(f"\n   Overall: Your facial expressions, voice characteristics, and speech content")
         print(f"   show {'strong alignment' if stability_percentage > 60 else 'dynamic variation'}")
     
     print("\n" + "="*70)
@@ -478,14 +563,15 @@ def format_combined_results(emotion_data: Dict[str, Any], voice_data: Dict[str, 
 # ---------- Main Function ----------
 def run_multimodal_analysis():
     """
-    Run simultaneous video and audio recording with analysis
+    Run simultaneous video and audio recording with analysis and transcription
     """
     print("\n" + "="*70)
-    print("      🎭🎤 MULTIMODAL EMOTION & VOICE ANALYSIS 🎤🎭")
+    print("      🎭🎤📝 MULTIMODAL EMOTION, VOICE & SPEECH ANALYSIS 📝🎤🎭")
     print("="*70)
     print("\nThis tool will simultaneously:")
     print("  • Record video for 15 seconds and detect facial emotions")
     print("  • Record audio for 15 seconds and analyze voice characteristics")
+    print("  • Transcribe your speech using Google Speech-to-Text")
     print("  • Provide comprehensive multimodal analysis")
     print("\nMake sure your webcam and microphone are ready!")
     print("="*70)
@@ -506,8 +592,8 @@ def run_multimodal_analysis():
     voice_results = {}
     
     # Run video recording in main thread (needs GUI)
-    # Run audio recording in separate thread
-    audio_thread = threading.Thread(target=lambda: voice_results.update(record_audio_analysis()))
+    # Run audio recording with transcription in separate thread
+    audio_thread = threading.Thread(target=lambda: voice_results.update(record_audio_analysis_with_transcription()))
     
     # Start audio thread
     audio_thread.start()
