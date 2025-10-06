@@ -1,0 +1,28 @@
+# Multimodal Emotion and Voice Analysis - Requirements
+# Install with: pip install -r requirements.txt
+# Or use conda: conda install --file requirements.txt
+
+# Core dependencies
+numpy>=1.21.0
+opencv-python>=4.5.0
+scipy>=1.7.0
+
+# Audio processing
+librosa>=0.9.0
+pyaudio>=0.2.11
+soundfile>=0.10.0
+
+# Machine Learning
+onnxruntime>=1.10.0
+
+# Data handling
+pathlib2>=2.3.0; python_version < "3.4"
+
+# Optional: For better performance
+# numba>=0.56.0  # Uncomment for faster audio processing
+# scikit-learn>=1.0.0  # Uncomment for advanced ML features
+
+# Development dependencies (optional)
+# pytest>=6.0.0
+# black>=21.0.0
+# flake8>=3.9.0
