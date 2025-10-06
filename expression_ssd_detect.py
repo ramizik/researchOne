@@ -1,6 +1,6 @@
 """
-Emotion Detection 
-- Press 'q' to quit
+Emotion Detection - 15 Second Recording Mode
+Records video for 15 seconds and analyzes emotions per second
 """
 
 import cv2
@@ -9,13 +9,15 @@ import time
 from cv2 import dnn
 from math import ceil
 from pathlib import Path
-import sys 
+import sys
+from collections import defaultdict, Counter
 
 # ---------- Config ----------
-USE_WEBCAM = False             # True = webcam, False = video file
-VIDEO_FILE = "video1.mp4"     # used if USE_WEBCAM is False
-SAVE_OUTPUT = True            # write annotated AVI next to this script
+USE_WEBCAM = True              # True = webcam, False = video file
+VIDEO_FILE = "video1.mp4"      # used if USE_WEBCAM is False
+SAVE_OUTPUT = True             # write annotated AVI next to this script
 OUTPUT_FPS = 10
+RECORDING_DURATION = 15        # seconds to record
 
 # ---------- Globals ----------
 image_mean = np.array([127, 127, 127])
@@ -136,6 +138,108 @@ def center_form_to_corner_form(locations):
     )
 
 # ---------------face detection ends here-----------
+
+def format_emotion_results(emotions_by_second, total_duration):
+    """
+    Format and display emotion analysis results in a user-friendly way
+    
+    Args:
+        emotions_by_second: Dictionary mapping second -> list of detected emotions
+        total_duration: Total recording duration in seconds
+    """
+    print("\n" + "="*60)
+    print("           EMOTION ANALYSIS RESULTS")
+    print("="*60)
+    
+    # Flatten all emotions into a single list
+    all_emotions = []
+    for second, emotions in emotions_by_second.items():
+        all_emotions.extend(emotions)
+    
+    if not all_emotions:
+        print("\n⚠️  No emotions detected during the recording.")
+        print("   Please ensure:")
+        print("   • Your face is clearly visible")
+        print("   • There is adequate lighting")
+        print("   • You're facing the camera")
+        print("\n" + "="*60)
+        return
+    
+    # Calculate statistics
+    emotion_counts = Counter(all_emotions)
+    total_detections = len(all_emotions)
+    dominant_emotion = emotion_counts.most_common(1)[0][0]
+    
+    # Emotion emojis
+    emotion_emojis = {
+        "neutral": "😐",
+        "happiness": "😊",
+        "surprise": "😲",
+        "sadness": "😢",
+        "anger": "😠",
+        "disgust": "🤢",
+        "fear": "😨"
+    }
+    
+    # Display overall statistics
+    print(f"\n📊 OVERALL STATISTICS:")
+    print(f"   Recording Duration: {total_duration} seconds")
+    print(f"   Total Detections: {total_detections}")
+    print(f"   Dominant Emotion: {emotion_emojis.get(dominant_emotion, '🎭')} {dominant_emotion.title()}")
+    
+    # Display emotion distribution
+    print(f"\n🎭 EMOTION DISTRIBUTION:")
+    for emotion, count in emotion_counts.most_common():
+        percentage = (count / total_detections) * 100
+        emoji = emotion_emojis.get(emotion, "🎭")
+        bar_length = int(percentage / 2)  # Scale bar to max 50 chars
+        bar = "█" * bar_length
+        print(f"   {emoji} {emotion.title():12} {bar} {percentage:5.1f}% ({count})")
+    
+    # Display timeline
+    print(f"\n⏱️  EMOTION TIMELINE:")
+    for second in sorted(emotions_by_second.keys()):
+        emotions = emotions_by_second[second]
+        if emotions:
+            # Get most common emotion for this second
+            second_emotion = Counter(emotions).most_common(1)[0][0]
+            emoji = emotion_emojis.get(second_emotion, "🎭")
+            print(f"   Second {second:2d}: {emoji} {second_emotion.title()}")
+        else:
+            print(f"   Second {second:2d}: ❌ No face detected")
+    
+    # Display insights
+    print(f"\n💡 INSIGHTS:")
+    unique_emotions = len(emotion_counts)
+    if unique_emotions == 1:
+        print(f"   • Consistent emotional state throughout recording")
+    elif unique_emotions <= 3:
+        print(f"   • Relatively stable emotions with {unique_emotions} different states")
+    else:
+        print(f"   • Highly variable emotions with {unique_emotions} different states")
+    
+    # Calculate emotional stability
+    emotion_changes = 0
+    prev_emotion = None
+    for second in sorted(emotions_by_second.keys()):
+        if emotions_by_second[second]:
+            curr_emotion = Counter(emotions_by_second[second]).most_common(1)[0][0]
+            if prev_emotion and curr_emotion != prev_emotion:
+                emotion_changes += 1
+            prev_emotion = curr_emotion
+    
+    stability_percentage = ((total_duration - emotion_changes) / total_duration) * 100
+    if stability_percentage > 80:
+        print(f"   • Very stable emotional state ({stability_percentage:.0f}% stability)")
+    elif stability_percentage > 60:
+        print(f"   • Moderately stable emotions ({stability_percentage:.0f}% stability)")
+    else:
+        print(f"   • Dynamic emotional expression ({stability_percentage:.0f}% stability)")
+    
+    print("\n" + "="*60)
+    print("Analysis complete! 🎉")
+    print("="*60)
+
 # ---------- Main ----------
 def FER_live_cam():
     emotion_dict = {
@@ -192,10 +296,28 @@ def FER_live_cam():
     width, height = input_size
     priors = define_img_size(input_size)
 
+    # Initialize emotion tracking
+    emotions_by_second = defaultdict(list)
+    start_time = time.time()
+    frame_count = 0
+    
+    print("\n" + "="*60)
+    print(f"🎥 Recording for {RECORDING_DURATION} seconds...")
+    print("Please look at the camera and show your emotions!")
+    print("="*60 + "\n")
+
     while True:
         ret, frame = cap.read()
         if not ret or frame is None:
             print("No frame received. Exiting...")
+            break
+
+        # Calculate elapsed time
+        elapsed_time = time.time() - start_time
+        current_second = int(elapsed_time)
+        
+        # Stop after recording duration
+        if elapsed_time >= RECORDING_DURATION:
             break
 
         start_t = time.time()
@@ -215,6 +337,9 @@ def FER_live_cam():
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
+        # Track emotions for this frame
+        frame_emotions = []
+        
         for (x1, y1, x2, y2) in boxes:
             x1 = max(0, min(int(x1), frame.shape[1] - 1))
             y1 = max(0, min(int(y1), frame.shape[0] - 1))
@@ -235,6 +360,9 @@ def FER_live_cam():
             output = emo_net.forward()[0]  # FER+ returns 8 emotions in some variants; mapping used here is 7
             pred_idx = int(np.argmax(output))
             pred = emotion_dict.get(pred_idx, "unknown")
+            
+            # Store emotion for this second
+            frame_emotions.append(pred)
 
             cv2.rectangle(frame, (x1, y1), (x2, y2), (215, 5, 247), 2, lineType=cv2.LINE_AA)
             cv2.putText(
@@ -247,14 +375,31 @@ def FER_live_cam():
                 2,
                 lineType=cv2.LINE_AA,
             )
+        
+        # Add detected emotions to the current second
+        emotions_by_second[current_second].extend(frame_emotions)
 
+        # Display recording progress
+        remaining = RECORDING_DURATION - int(elapsed_time)
         fps = 1.0 / max(1e-6, (time.time() - start_t))
+        
         cv2.putText(
             frame,
-            f"FPS: {fps:.1f}",
+            f"Recording: {remaining}s left",
             (10, 30),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.8,
+            (0, 255, 0),
+            2,
+            lineType=cv2.LINE_AA,
+        )
+        
+        cv2.putText(
+            frame,
+            f"FPS: {fps:.1f}",
+            (10, 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
             (0, 255, 0),
             2,
             lineType=cv2.LINE_AA,
@@ -263,15 +408,43 @@ def FER_live_cam():
         if writer is not None:
             writer.write(frame)
 
-        cv2.imshow("Emotion (press q to quit)", frame)
+        cv2.imshow("Emotion Recording", frame)
+        
+        # Allow early exit with 'q'
         if cv2.waitKey(1) & 0xFF == ord("q"):
+            print("\nRecording stopped by user.")
             break
+        
+        frame_count += 1
+        
+        # Print progress to console
+        if current_second > 0 and frame_count % 30 == 0:  # Print every ~1 second
+            print(f"⏱️  Recording... {current_second}/{RECORDING_DURATION} seconds")
 
     cap.release()
     if writer is not None:
         writer.release()
     cv2.destroyAllWindows()
+    
+    print(f"\n✅ Recording complete! Captured {frame_count} frames.")
+    print("📊 Processing results...\n")
+    
+    # Format and display results
+    format_emotion_results(emotions_by_second, RECORDING_DURATION)
 
 if __name__ == "__main__":
+    print("\n" + "="*60)
+    print("      🎭 EMOTION DETECTION - 15 SECOND ANALYSIS 🎭")
+    print("="*60)
+    print("\nThis tool will:")
+    print("  • Record video for 15 seconds from your webcam")
+    print("  • Detect facial emotions in real-time")
+    print("  • Track emotions per second")
+    print("  • Provide detailed analysis and insights")
+    print("\nMake sure your webcam is connected and ready!")
+    print("="*60)
+    
+    input("\nPress ENTER to start recording...")
+    
     FER_live_cam()
 
