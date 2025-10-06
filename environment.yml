@@ -10,7 +10,11 @@ dependencies:
   - librosa>=0.9.0
   - libsndfile>=1.0.0
   - onnxruntime>=1.10.0
+  - matplotlib>=3.5.0
+  - pathlib2>=2.3.0
   - pip
   - pip:
     - pyaudio>=0.2.11
     - soundfile>=0.10.0
+    - google-cloud-speech>=2.21.0
+    - google-cloud-storage>=2.10.0
