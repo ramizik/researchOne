@@ -20,8 +20,8 @@ conda create -n multimodal-analysis python=3.9
 conda activate multimodal-analysis
 
 # Install packages
-conda install numpy opencv scipy librosa soundfile onnxruntime
-pip install pyaudio
+conda install numpy opencv scipy librosa libsndfile onnxruntime
+pip install pyaudio soundfile
 ```
 
 ## Option 2: Using Pip
@@ -76,6 +76,16 @@ pip install pyaudio
 ```bash
 # If opencv-python fails, try:
 pip install opencv-python-headless
+```
+
+### Soundfile Issues:
+```bash
+# If soundfile fails on conda, install libsndfile first:
+conda install libsndfile
+pip install soundfile
+
+# Or use alternative:
+pip install librosa[soundfile]
 ```
 
 ## Verify Installation
