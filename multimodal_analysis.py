@@ -522,6 +522,11 @@ def record_video_emotions() -> Dict[str, Any]:
     start_time = time.time()
     frame_count = 0
     
+    # Create window with controlled size
+    window_name = "Multimodal Recording"
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, 800, 600)  # Set window to 800x600 pixels
+    
     print("🎥 Recording video...")
     
     while True:
@@ -604,7 +609,7 @@ def record_video_emotions() -> Dict[str, Any]:
         if writer is not None:
             writer.write(frame)
         
-        cv2.imshow("Multimodal Recording", frame)
+        cv2.imshow(window_name, frame)
         
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break

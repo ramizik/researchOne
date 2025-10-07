@@ -301,6 +301,11 @@ def FER_live_cam():
     start_time = time.time()
     frame_count = 0
     
+    # Create window with controlled size
+    window_name = "Emotion Recording"
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, 800, 600)  # Set window to 800x600 pixels
+    
     print("\n" + "="*60)
     print(f"🎥 Recording for {RECORDING_DURATION} seconds...")
     print("Please look at the camera and show your emotions!")
@@ -408,7 +413,7 @@ def FER_live_cam():
         if writer is not None:
             writer.write(frame)
 
-        cv2.imshow("Emotion Recording", frame)
+        cv2.imshow(window_name, frame)
         
         # Allow early exit with 'q'
         if cv2.waitKey(1) & 0xFF == ord("q"):
