@@ -21,6 +21,19 @@ warnings.filterwarnings('ignore', category=UserWarning)
 
 logger = logging.getLogger(__name__)
 
+# ---------- Custom Exceptions ----------
+class VoiceAnalysisError(Exception):
+    """Base exception for voice analysis errors"""
+    pass
+
+class InsufficientDataError(VoiceAnalysisError):
+    """Insufficient data for analysis"""
+    pass
+
+class AudioQualityError(VoiceAnalysisError):
+    """Audio quality issues"""
+    pass
+
 class VoiceAnalyzer:
     """Custom voice analysis implementation"""
     
@@ -118,12 +131,7 @@ class VoiceAnalyzer:
             
             # Lower threshold for short recordings - require at least 3 pitch values
             if not pitch_values or len(pitch_values) < 3:
-                logger.error("Insufficient pitch data detected. Please try:")
-                logger.error("1. Speak louder and closer to the microphone")
-                logger.error("2. Try singing a sustained note (like 'ahhh') instead of talking")
-                logger.error("3. Ensure there's minimal background noise")
-                logger.error("4. Try a longer recording duration")
-                raise ValueError("Insufficient pitch data for analysis")
+                raise InsufficientDataError("Insufficient pitch data for analysis. Please try: 1) Speak louder and closer to the microphone, 2) Try singing a sustained note (like 'ahhh') instead of talking, 3) Ensure there's minimal background noise, 4) Try a longer recording duration")
             
             # Calculate advanced metrics
             pitch_values = np.array(pitch_values)
@@ -131,16 +139,17 @@ class VoiceAnalyzer:
             # Extract harmonic features for better voice characterization
             harmonic_features = self._extract_harmonic_features(audio_data, sample_rate)
             
-            # Calculate refined metrics
+            # Calculate refined metrics for emotional analysis
             analysis_results = {
                 "mean_pitch": float(self._calculate_robust_mean_pitch(pitch_values)),
                 "vibrato_rate": self._calculate_vibrato_rate_advanced(pitch_values, sample_rate),
                 "jitter": self._calculate_jitter_advanced(pitch_values, sample_rate),
                 "shimmer": self._calculate_shimmer_advanced(audio_data, sample_rate),
-                "dynamics": self._categorize_dynamics_advanced(pitch_values, audio_data),
                 "voice_type": self._determine_voice_type_advanced(pitch_values, harmonic_features),
                 "lowest_note": self._frequency_to_note(self._get_stable_pitch_percentile(pitch_values, 5)),
                 "highest_note": self._frequency_to_note(self._get_stable_pitch_percentile(pitch_values, 95)),
+                "singing_characteristics": self._analyze_singing_characteristics(pitch_values, audio_data, sample_rate),
+                "emotional_indicators": self._extract_emotional_voice_indicators(pitch_values, audio_data, sample_rate),
             }
             
             # Validate and refine results
@@ -149,9 +158,11 @@ class VoiceAnalyzer:
             logger.info(f"Voice analysis completed: {analysis_results}")
             return analysis_results
             
+        except (InsufficientDataError, AudioQualityError, VoiceAnalysisError):
+            raise
         except Exception as e:
             logger.error(f"Error in voice analysis: {str(e)}", exc_info=True)
-            raise
+            raise VoiceAnalysisError(f"Unexpected error in voice analysis: {str(e)}")
     
     async def analyze_audio_file(self, audio_file_path: str, mean_pitch: Optional[float] = None) -> Dict[str, Any]:
         """
@@ -188,16 +199,17 @@ class VoiceAnalyzer:
             # Extract harmonic features for better voice characterization
             harmonic_features = self._extract_harmonic_features(y, sr)
             
-            # Calculate refined metrics
+            # Calculate refined metrics for emotional analysis
             analysis_results = {
                 "mean_pitch": float(self._calculate_robust_mean_pitch(pitch_values)),
                 "vibrato_rate": self._calculate_vibrato_rate_advanced(pitch_values, sr),
                 "jitter": self._calculate_jitter_advanced(pitch_values, sr),
                 "shimmer": self._calculate_shimmer_advanced(y, sr),
-                "dynamics": self._categorize_dynamics_advanced(pitch_values, y),
                 "voice_type": self._determine_voice_type_advanced(pitch_values, harmonic_features),
                 "lowest_note": self._frequency_to_note(self._get_stable_pitch_percentile(pitch_values, 5)),
                 "highest_note": self._frequency_to_note(self._get_stable_pitch_percentile(pitch_values, 95)),
+                "singing_characteristics": self._analyze_singing_characteristics(pitch_values, y, sr),
+                "emotional_indicators": self._extract_emotional_voice_indicators(pitch_values, y, sr),
             }
             
             # Validate and refine results
@@ -343,22 +355,22 @@ class VoiceAnalyzer:
         # Check if audio has sufficient length
         min_duration = 1.0  # Minimum 1 second
         if len(audio_data) < sample_rate * min_duration:
-            raise ValueError(f"Recording too short. Minimum duration: {min_duration} seconds")
+            raise AudioQualityError(f"Recording too short. Minimum duration: {min_duration} seconds")
         
         # Check if audio has sufficient amplitude (not too quiet)
         rms_energy = np.sqrt(np.mean(audio_data**2))
         min_rms = 0.001  # Minimum RMS energy threshold
         if rms_energy < min_rms:
-            raise ValueError("Recording too quiet. Please speak louder and closer to the microphone")
+            raise AudioQualityError("Recording too quiet. Please speak louder and closer to the microphone")
         
         # Check for clipping (too loud)
         max_amplitude = np.max(np.abs(audio_data))
         if max_amplitude > 0.95:
-            raise ValueError("Recording too loud (clipping detected). Please speak more quietly")
+            raise AudioQualityError("Recording too loud (clipping detected). Please speak more quietly")
         
         # Check for silence (all zeros or very low variance)
         if np.var(audio_data) < 1e-8:
-            raise ValueError("No audio detected. Please check your microphone and try again")
+            raise AudioQualityError("No audio detected. Please check your microphone and try again")
         
         logger.info(f"Audio quality validation passed: RMS={rms_energy:.4f}, Max={max_amplitude:.4f}")
     
@@ -710,6 +722,328 @@ class VoiceAnalyzer:
         
         return f"{note_names[note_index]}{octave}"
     
+    def _analyze_singing_characteristics(self, pitch_values: np.ndarray, audio: np.ndarray, sr: int) -> Dict[str, Any]:
+        """Analyze singing characteristics for emotional analysis"""
+        try:
+            # Pitch stability for singing quality
+            pitch_std = np.std(pitch_values)
+            pitch_mean = np.mean(pitch_values)
+            pitch_cv = pitch_std / pitch_mean if pitch_mean > 0 else 0
+            
+            # Melodic contour analysis
+            pitch_diff = np.diff(pitch_values)
+            ascending_movements = np.sum(pitch_diff > 0)
+            descending_movements = np.sum(pitch_diff < 0)
+            total_movements = len(pitch_diff)
+            
+            # Singing style classification
+            if pitch_cv < 0.05:
+                singing_style = "monotone"
+            elif pitch_cv < 0.15:
+                singing_style = "controlled"
+            elif pitch_cv < 0.25:
+                singing_style = "expressive"
+            else:
+                singing_style = "highly_variable"
+            
+            # Pitch range analysis
+            pitch_range = np.ptp(pitch_values)
+            range_ratio = pitch_range / pitch_mean if pitch_mean > 0 else 0
+            
+            # Vibrato presence and quality
+            vibrato_present = self._detect_vibrato_presence(pitch_values, sr)
+            vibrato_quality = self._assess_vibrato_quality(pitch_values, sr)
+            
+            return {
+                "pitch_stability": float(pitch_cv),
+                "melodic_contour": {
+                    "ascending_ratio": float(ascending_movements / total_movements) if total_movements > 0 else 0,
+                    "descending_ratio": float(descending_movements / total_movements) if total_movements > 0 else 0,
+                    "movement_direction": "ascending" if ascending_movements > descending_movements else "descending"
+                },
+                "singing_style": singing_style,
+                "pitch_range_ratio": float(range_ratio),
+                "vibrato_present": vibrato_present,
+                "vibrato_quality": vibrato_quality,
+                "overall_singing_quality": self._assess_singing_quality(pitch_cv, range_ratio, vibrato_present)
+            }
+            
+        except Exception as e:
+            logger.warning(f"Error in singing characteristics analysis: {e}")
+            return {
+                "pitch_stability": 0.1,
+                "melodic_contour": {"ascending_ratio": 0.5, "descending_ratio": 0.5, "movement_direction": "neutral"},
+                "singing_style": "unknown",
+                "pitch_range_ratio": 0.2,
+                "vibrato_present": False,
+                "vibrato_quality": "none",
+                "overall_singing_quality": "unknown"
+            }
+    
+    def _extract_emotional_voice_indicators(self, pitch_values: np.ndarray, audio: np.ndarray, sr: int) -> Dict[str, Any]:
+        """Extract voice indicators that correlate with emotional states"""
+        try:
+            # Energy and intensity analysis
+            rms_energy = np.sqrt(np.mean(audio**2))
+            energy_variance = np.var(np.abs(audio))
+            
+            # Pitch-based emotional indicators
+            pitch_mean = np.mean(pitch_values)
+            pitch_std = np.std(pitch_values)
+            pitch_trend = self._calculate_pitch_trend(pitch_values)
+            
+            # Voice quality indicators
+            jitter = self._calculate_jitter_advanced(pitch_values, sr)
+            shimmer = self._calculate_shimmer_advanced(audio, sr)
+            
+            # Emotional state indicators
+            emotional_indicators = {
+                "energy_level": self._categorize_energy_level(rms_energy),
+                "intensity_variation": self._categorize_intensity_variation(energy_variance),
+                "pitch_trend": pitch_trend,
+                "voice_tension": self._assess_voice_tension(jitter, shimmer),
+                "emotional_arousal": self._assess_emotional_arousal(pitch_mean, pitch_std, rms_energy),
+                "voice_quality": self._assess_emotional_voice_quality(jitter, shimmer, pitch_std),
+                "speaking_rate": self._estimate_speaking_rate(audio, sr),
+                "breath_control": self._assess_breath_control(pitch_values, audio, sr)
+            }
+            
+            return emotional_indicators
+            
+        except Exception as e:
+            logger.warning(f"Error in emotional voice indicators extraction: {e}")
+            return {
+                "energy_level": "medium",
+                "intensity_variation": "moderate",
+                "pitch_trend": "stable",
+                "voice_tension": "normal",
+                "emotional_arousal": "neutral",
+                "voice_quality": "normal",
+                "speaking_rate": "normal",
+                "breath_control": "normal"
+            }
+    
+    def _detect_vibrato_presence(self, pitch_values: np.ndarray, sr: int) -> bool:
+        """Detect if vibrato is present in the voice"""
+        try:
+            if len(pitch_values) < 20:
+                return False
+            
+            # Convert to cents for vibrato analysis
+            pitch_cents = 1200 * np.log2(pitch_values / np.mean(pitch_values))
+            pitch_cents = signal.detrend(pitch_cents, type='linear')
+            
+            # Check for periodic variation in vibrato range (3-8 Hz)
+            nperseg = min(len(pitch_cents), 256)
+            frequencies, psd = signal.welch(pitch_cents, fs=sr/512, nperseg=nperseg)
+            
+            vibrato_mask = (frequencies >= 3) & (frequencies <= 8)
+            if np.any(vibrato_mask):
+                vibrato_power = np.max(psd[vibrato_mask])
+                noise_floor = np.median(psd)
+                return vibrato_power > 2 * noise_floor
+            
+            return False
+        except:
+            return False
+    
+    def _assess_vibrato_quality(self, pitch_values: np.ndarray, sr: int) -> str:
+        """Assess the quality of vibrato if present"""
+        try:
+            if not self._detect_vibrato_presence(pitch_values, sr):
+                return "none"
+            
+            vibrato_rate = self._calculate_vibrato_rate_advanced(pitch_values, sr)
+            
+            if vibrato_rate < 4:
+                return "slow"
+            elif vibrato_rate < 6:
+                return "normal"
+            else:
+                return "fast"
+        except Exception as e:
+            raise VoiceAnalysisError(f"Error assessing vibrato quality: {str(e)}")
+    
+    def _assess_singing_quality(self, pitch_cv: float, range_ratio: float, vibrato_present: bool) -> str:
+        """Assess overall singing quality"""
+        try:
+            quality_score = 0
+            
+            # Pitch stability (lower is better)
+            if pitch_cv < 0.05:
+                quality_score += 3
+            elif pitch_cv < 0.15:
+                quality_score += 2
+            elif pitch_cv < 0.25:
+                quality_score += 1
+            
+            # Pitch range (moderate is good)
+            if 0.2 <= range_ratio <= 0.6:
+                quality_score += 2
+            elif 0.1 <= range_ratio <= 0.8:
+                quality_score += 1
+            
+            # Vibrato presence
+            if vibrato_present:
+                quality_score += 1
+            
+            if quality_score >= 5:
+                return "excellent"
+            elif quality_score >= 3:
+                return "good"
+            elif quality_score >= 1:
+                return "fair"
+            else:
+                return "poor"
+        except Exception as e:
+            raise VoiceAnalysisError(f"Error assessing singing quality: {str(e)}")
+    
+    def _calculate_pitch_trend(self, pitch_values: np.ndarray) -> str:
+        """Calculate overall pitch trend"""
+        try:
+            if len(pitch_values) < 3:
+                return "stable"
+            
+            # Linear regression to find trend
+            x = np.arange(len(pitch_values))
+            slope, _, _, _, _ = linregress(x, pitch_values)
+            
+            if slope > 0.5:
+                return "rising"
+            elif slope < -0.5:
+                return "falling"
+            else:
+                return "stable"
+        except:
+            return "stable"
+    
+    def _categorize_energy_level(self, rms_energy: float) -> str:
+        """Categorize energy level based on RMS energy"""
+        if rms_energy < 0.01:
+            return "low"
+        elif rms_energy < 0.05:
+            return "medium"
+        else:
+            return "high"
+    
+    def _categorize_intensity_variation(self, energy_variance: float) -> str:
+        """Categorize intensity variation"""
+        if energy_variance < 1e-6:
+            return "minimal"
+        elif energy_variance < 1e-4:
+            return "moderate"
+        else:
+            return "high"
+    
+    def _assess_voice_tension(self, jitter: float, shimmer: float) -> str:
+        """Assess voice tension based on jitter and shimmer"""
+        tension_score = jitter * 1000 + shimmer * 100  # Scale to similar ranges
+        
+        if tension_score < 20:
+            return "relaxed"
+        elif tension_score < 40:
+            return "normal"
+        elif tension_score < 60:
+            return "tense"
+        else:
+            return "very_tense"
+    
+    def _assess_emotional_arousal(self, pitch_mean: float, pitch_std: float, rms_energy: float) -> str:
+        """Assess emotional arousal level"""
+        # Higher pitch and energy typically indicate higher arousal
+        arousal_score = 0
+        
+        if pitch_mean > 300:  # Higher pitch
+            arousal_score += 1
+        if pitch_std > 50:  # More pitch variation
+            arousal_score += 1
+        if rms_energy > 0.03:  # Higher energy
+            arousal_score += 1
+        
+        if arousal_score >= 2:
+            return "high"
+        elif arousal_score >= 1:
+            return "medium"
+        else:
+            return "low"
+    
+    def _assess_emotional_voice_quality(self, jitter: float, shimmer: float, pitch_std: float) -> str:
+        """Assess voice quality from emotional perspective"""
+        quality_score = 0
+        
+        # Lower jitter and shimmer are better
+        if jitter < 0.01:
+            quality_score += 1
+        if shimmer < 0.02:
+            quality_score += 1
+        if pitch_std < 30:  # More stable pitch
+            quality_score += 1
+        
+        if quality_score >= 2:
+            return "clear"
+        elif quality_score >= 1:
+            return "moderate"
+        else:
+            return "rough"
+    
+    def _estimate_speaking_rate(self, audio: np.ndarray, sr: int) -> str:
+        """Estimate speaking rate from audio characteristics"""
+        try:
+            # Simple estimation based on energy peaks
+            audio_abs = np.abs(audio)
+            threshold = np.percentile(audio_abs, 75)
+            peaks, _ = signal.find_peaks(audio_abs, height=threshold, distance=int(sr/20))
+            
+            # Estimate syllables per second
+            duration = len(audio) / sr
+            syllables_per_second = len(peaks) / duration if duration > 0 else 0
+            
+            if syllables_per_second < 2:
+                return "slow"
+            elif syllables_per_second < 4:
+                return "normal"
+            else:
+                return "fast"
+        except:
+            return "normal"
+    
+    def _assess_breath_control(self, pitch_values: np.ndarray, audio: np.ndarray, sr: int) -> str:
+        """Assess breath control quality"""
+        try:
+            # Look for consistent energy and pitch over time
+            window_size = int(sr * 0.5)  # 0.5 second windows
+            energy_windows = []
+            pitch_windows = []
+            
+            for i in range(0, len(audio) - window_size, window_size):
+                window_audio = audio[i:i+window_size]
+                window_pitch = pitch_values[i//512:(i+window_size)//512] if len(pitch_values) > (i+window_size)//512 else []
+                
+                if len(window_audio) > 0:
+                    energy_windows.append(np.sqrt(np.mean(window_audio**2)))
+                if len(window_pitch) > 0:
+                    pitch_windows.append(np.mean(window_pitch))
+            
+            if len(energy_windows) < 2 or len(pitch_windows) < 2:
+                raise InsufficientDataError("Insufficient data for breath control assessment")
+            
+            # Calculate consistency
+            energy_cv = np.std(energy_windows) / np.mean(energy_windows)
+            pitch_cv = np.std(pitch_windows) / np.mean(pitch_windows)
+            
+            consistency_score = 1 / (energy_cv + pitch_cv + 1e-8)
+            
+            if consistency_score > 10:
+                return "excellent"
+            elif consistency_score > 5:
+                return "good"
+            elif consistency_score > 2:
+                return "fair"
+            else:
+                return "poor"
+        except Exception as e:
+            raise VoiceAnalysisError(f"Error assessing breath control: {str(e)}")
+
     def _validate_and_refine_results(self, results: Dict[str, Any], frontend_pitch: Optional[float]) -> Dict[str, Any]:
         """Validate and refine analysis results"""
         # Validate mean pitch
@@ -725,6 +1059,24 @@ class VoiceAnalyzer:
         results['vibrato_rate'] = np.clip(results['vibrato_rate'], 0, 10)
         results['jitter'] = np.clip(results['jitter'], 0.001, 0.050)
         results['shimmer'] = np.clip(results['shimmer'], 0.005, 0.060)
+        
+        # Validate new emotional analysis parameters
+        if 'singing_characteristics' in results:
+            singing = results['singing_characteristics']
+            singing['pitch_stability'] = np.clip(singing.get('pitch_stability', 0.1), 0, 1)
+            singing['pitch_range_ratio'] = np.clip(singing.get('pitch_range_ratio', 0.2), 0, 2)
+        
+        if 'emotional_indicators' in results:
+            emotional = results['emotional_indicators']
+            # Ensure all emotional indicators have valid values
+            for key in emotional:
+                if isinstance(emotional[key], str):
+                    # Keep string values as is
+                    continue
+                elif isinstance(emotional[key], (int, float)):
+                    # Clip numeric values to reasonable ranges
+                    if 'ratio' in key or 'level' in key:
+                        emotional[key] = np.clip(emotional[key], 0, 1)
         
         # Validate note range
         lowest_freq = librosa.note_to_hz(results['lowest_note'])
@@ -787,16 +1139,27 @@ def format_analysis_results(results: Dict[str, Any]) -> None:
     print(f"   Jitter: {results['jitter']:.3f} ({'Low' if results['jitter'] < 0.01 else 'Medium' if results['jitter'] < 0.02 else 'High'} stability)")
     print(f"   Shimmer: {results['shimmer']:.3f} ({'Low' if results['shimmer'] < 0.015 else 'Medium' if results['shimmer'] < 0.025 else 'High'} amplitude variation)")
     
-    # Dynamics
-    dynamics_emoji = {
-        'stable': '🔒',
-        'controlled': '🎯',
-        'variable': '📈',
-        'expressive': '🎭',
-        'highly expressive': '🌟'
-    }
-    print(f"\n🎨 DYNAMICS:")
-    print(f"   Style: {dynamics_emoji.get(results['dynamics'], '🎵')} {results['dynamics'].title()}")
+    # Singing Characteristics
+    if 'singing_characteristics' in results:
+        singing = results['singing_characteristics']
+        print(f"\n🎵 SINGING CHARACTERISTICS:")
+        print(f"   Style: {singing.get('singing_style', 'unknown').title()}")
+        print(f"   Quality: {singing.get('overall_singing_quality', 'unknown').title()}")
+        print(f"   Pitch Stability: {singing.get('pitch_stability', 0):.3f}")
+        print(f"   Vibrato: {'Present' if singing.get('vibrato_present', False) else 'Not detected'}")
+        if singing.get('vibrato_present', False):
+            print(f"   Vibrato Quality: {singing.get('vibrato_quality', 'unknown').title()}")
+    
+    # Emotional Voice Indicators
+    if 'emotional_indicators' in results:
+        emotional = results['emotional_indicators']
+        print(f"\n🎭 EMOTIONAL VOICE INDICATORS:")
+        print(f"   Energy Level: {emotional.get('energy_level', 'unknown').title()}")
+        print(f"   Emotional Arousal: {emotional.get('emotional_arousal', 'unknown').title()}")
+        print(f"   Voice Tension: {emotional.get('voice_tension', 'unknown').title()}")
+        print(f"   Voice Quality: {emotional.get('voice_quality', 'unknown').title()}")
+        print(f"   Speaking Rate: {emotional.get('speaking_rate', 'unknown').title()}")
+        print(f"   Breath Control: {emotional.get('breath_control', 'unknown').title()}")
     
     print("\n" + "="*60)
     print("Analysis complete! 🎉")

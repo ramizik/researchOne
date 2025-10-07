@@ -54,13 +54,7 @@ Simply place your downloaded `credentials.json` file in the project directory (s
 
 The system will automatically detect and use this file for authentication. No environment variables needed!
 
-## Step 7: Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-## Step 8: Test the Setup
+## Step 7: Test the Setup
 
 Run the multimodal analysis to test the integration:
 
@@ -113,15 +107,23 @@ except Exception as e:
 - Keep your JSON credentials file secure
 - Never commit credentials to version control
 - Consider using more restrictive IAM roles in production
-- The `multimodal-speech-credentials.json` file should be added to `.gitignore`
+- Add `credentials.json` to `.gitignore`
 
-## Next Steps
+## Features Enabled
 
 Once setup is complete, your multimodal analysis will include:
 - Facial emotion detection
-- Voice analysis (pitch, vibrato, jitter, shimmer)
+- Voice analysis (pitch, vibrato, jitter, shimmer, emotional indicators)
 - Speech transcription with confidence scores
 - Word-level timing information
-- Comprehensive multimodal insights
+- AI-powered insights using Google Gemini
+- Comprehensive multimodal analysis
 
-The system will gracefully handle cases where Google Cloud is not available, falling back to emotion and voice analysis only.
+## Error Handling
+
+The system includes comprehensive error handling. If Google Cloud is not available, the system will:
+- Display clear error messages
+- Provide troubleshooting steps
+- Gracefully shutdown with appropriate guidance
+
+See [Error Handling Guide](ERROR_HANDLING.md) for detailed troubleshooting information.

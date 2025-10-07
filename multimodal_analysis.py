@@ -12,15 +12,333 @@ from pathlib import Path
 import sys
 from collections import defaultdict, Counter
 import threading
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import warnings
+import json
+from datetime import datetime
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    print("⚠️  google-generativeai not installed. Install with: pip install google-generativeai")
 
 # Import voice analyzer and speech transcriber
-from voice_analyzer import VoiceAnalyzer
+from voice_analyzer import VoiceAnalyzer, VoiceAnalysisError, InsufficientDataError, AudioQualityError
 from speech_transcriber import SpeechTranscriber
 
 # Suppress warnings
 warnings.filterwarnings('ignore', category=UserWarning)
+
+# ---------- Custom Exceptions ----------
+class MultimodalAnalysisError(Exception):
+    """Base exception for multimodal analysis errors"""
+    pass
+
+class CameraError(MultimodalAnalysisError):
+    """Camera-related errors"""
+    pass
+
+class AudioError(MultimodalAnalysisError):
+    """Audio-related errors"""
+    pass
+
+class ModelError(MultimodalAnalysisError):
+    """Model-related errors (ONNX, face detection, etc.)"""
+    pass
+
+class GeminiError(MultimodalAnalysisError):
+    """Gemini AI-related errors"""
+    pass
+
+class TranscriptionError(MultimodalAnalysisError):
+    """Speech transcription errors"""
+    pass
+
+class VoiceAnalysisError(MultimodalAnalysisError):
+    """Voice analysis errors"""
+    pass
+
+# ---------- Memory Storage System ----------
+class AnalysisMemory:
+    """Temporary memory storage for analysis results during execution"""
+    
+    def __init__(self):
+        self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.emotion_data = {}
+        self.voice_data = {}
+        self.transcription_data = {}
+        self.analysis_metadata = {
+            "session_id": self.session_id,
+            "timestamp": datetime.now().isoformat(),
+            "recording_duration": RECORDING_DURATION,
+            "analysis_version": "2.0",
+            "status": "in_progress"
+        }
+    
+    def store_emotion_data(self, emotion_data: Dict[str, Any]):
+        """Store emotion analysis results"""
+        self.emotion_data = emotion_data
+        self.emotion_data["analysis_timestamp"] = datetime.now().isoformat()
+    
+    def store_voice_data(self, voice_data: Dict[str, Any]):
+        """Store voice analysis results"""
+        self.voice_data = voice_data
+        self.voice_data["analysis_timestamp"] = datetime.now().isoformat()
+    
+    def store_transcription_data(self, transcription_data: Dict[str, Any]):
+        """Store transcription results"""
+        self.transcription_data = transcription_data
+        self.transcription_data["analysis_timestamp"] = datetime.now().isoformat()
+    
+    def get_complete_analysis(self) -> Dict[str, Any]:
+        """Get complete analysis data for JSON export"""
+        self.analysis_metadata["status"] = "completed"
+        self.analysis_metadata["completion_timestamp"] = datetime.now().isoformat()
+        
+        return {
+            "metadata": self.analysis_metadata,
+            "emotion_analysis": self.emotion_data,
+            "voice_analysis": self.voice_data,
+            "transcription_analysis": self.transcription_data,
+            "multimodal_insights": self._generate_multimodal_insights()
+        }
+    
+    def _generate_multimodal_insights(self) -> Dict[str, Any]:
+        """Generate insights from combined analysis"""
+        insights = {
+            "emotional_coherence": "unknown",
+            "voice_emotion_alignment": "unknown",
+            "overall_emotional_state": "unknown",
+            "confidence_score": 0.0,
+            "key_observations": []
+        }
+        
+        try:
+            # Check if we have valid data
+            if "error" in self.emotion_data or "error" in self.voice_data:
+                insights["key_observations"].append("Incomplete analysis due to errors")
+                return insights
+            
+            # Extract key metrics
+            emotions_by_second = self.emotion_data.get("emotions_by_second", {})
+            all_emotions = []
+            for second, emotions in emotions_by_second.items():
+                all_emotions.extend(emotions)
+            
+            if not all_emotions:
+                insights["key_observations"].append("No facial emotions detected")
+                return insights
+            
+            # Calculate dominant emotion
+            emotion_counts = Counter(all_emotions)
+            dominant_emotion = emotion_counts.most_common(1)[0][0]
+            
+            # Get voice characteristics
+            voice_arousal = self.voice_data.get('emotional_indicators', {}).get('emotional_arousal', 'neutral')
+            voice_energy = self.voice_data.get('emotional_indicators', {}).get('energy_level', 'medium')
+            mean_pitch = self.voice_data.get('mean_pitch', 0)
+            
+            # Emotional coherence analysis
+            if dominant_emotion in ["happiness", "surprise"] and voice_arousal == "high":
+                insights["emotional_coherence"] = "high"
+                insights["key_observations"].append("Positive emotions align with high voice arousal")
+            elif dominant_emotion in ["sadness", "neutral"] and voice_arousal == "low":
+                insights["emotional_coherence"] = "high"
+                insights["key_observations"].append("Calm emotions align with low voice arousal")
+            elif dominant_emotion in ["anger", "fear"] and voice_arousal == "high":
+                insights["emotional_coherence"] = "high"
+                insights["key_observations"].append("Intense emotions align with high voice arousal")
+            else:
+                insights["emotional_coherence"] = "moderate"
+                insights["key_observations"].append("Mixed emotional signals detected")
+            
+            # Voice-emotion alignment
+            if mean_pitch > 250 and dominant_emotion in ["happiness", "surprise"]:
+                insights["voice_emotion_alignment"] = "high"
+                insights["key_observations"].append("High pitch matches positive emotions")
+            elif mean_pitch < 200 and dominant_emotion in ["sadness", "neutral"]:
+                insights["voice_emotion_alignment"] = "high"
+                insights["key_observations"].append("Low pitch matches subdued emotions")
+            else:
+                insights["voice_emotion_alignment"] = "moderate"
+            
+            # Overall emotional state
+            if insights["emotional_coherence"] == "high" and insights["voice_emotion_alignment"] == "high":
+                insights["overall_emotional_state"] = f"coherent_{dominant_emotion}"
+                insights["confidence_score"] = 0.9
+            elif insights["emotional_coherence"] == "high" or insights["voice_emotion_alignment"] == "high":
+                insights["overall_emotional_state"] = f"mostly_{dominant_emotion}"
+                insights["confidence_score"] = 0.7
+            else:
+                insights["overall_emotional_state"] = f"mixed_{dominant_emotion}"
+                insights["confidence_score"] = 0.5
+            
+            # Add transcription insights if available
+            if self.transcription_data.get("success", False):
+                word_count = self.transcription_data.get("word_count", 0)
+                speaking_rate = word_count / RECORDING_DURATION if RECORDING_DURATION > 0 else 0
+                insights["key_observations"].append(f"Speaking rate: {speaking_rate:.1f} words/second")
+                
+                if speaking_rate > 3:
+                    insights["key_observations"].append("Fast speaking rate detected")
+                elif speaking_rate < 1:
+                    insights["key_observations"].append("Slow speaking rate detected")
+            
+        except Exception as e:
+            insights["key_observations"].append(f"Error generating insights: {str(e)}")
+        
+        return insights
+
+# Global memory instance
+analysis_memory = AnalysisMemory()
+
+# ---------- Gemini AI Configuration ----------
+def configure_gemini():
+    """Configure Google Generative AI"""
+    if not GEMINI_AVAILABLE:
+        raise GeminiError("Google Generative AI package not installed. Install with: pip install google-generativeai")
+    
+    try:
+        # Try to load API key from environment variable or file
+        import os
+        api_key = os.getenv('GOOGLE_API_KEY')
+        
+        if not api_key:
+            # Try to load from credentials.json file
+            try:
+                with open('credentials.json', 'r') as f:
+                    creds = json.load(f)
+                    api_key = creds.get('api_key') or creds.get('GOOGLE_API_KEY')
+            except FileNotFoundError:
+                pass
+        
+        if not api_key:
+            raise GeminiError("Google API key not found. Please set GOOGLE_API_KEY environment variable or add 'api_key' to credentials.json")
+        
+        genai.configure(api_key=api_key)
+        return True
+        
+    except GeminiError:
+        raise
+    except Exception as e:
+        raise GeminiError(f"Error configuring Gemini: {str(e)}")
+
+def get_gemini_analysis(emotion_data: Dict[str, Any], voice_data: Dict[str, Any]) -> str:
+    """Get comprehensive analysis from Gemini AI"""
+    try:
+        # Configure Gemini
+        configure_gemini()
+        
+        # Create the model
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # Format the data for Gemini
+        analysis_prompt = format_data_for_gemini(emotion_data, voice_data)
+        
+        # Generate response
+        response = model.generate_content(analysis_prompt)
+        
+        if not response.text:
+            raise GeminiError("Empty response received from Gemini AI")
+        
+        return response.text
+        
+    except GeminiError:
+        raise
+    except Exception as e:
+        raise GeminiError(f"Error getting Gemini analysis: {str(e)}")
+
+def format_data_for_gemini(emotion_data: Dict[str, Any], voice_data: Dict[str, Any]) -> str:
+    """Format analysis data into a comprehensive prompt for Gemini"""
+    
+    # Extract key information
+    emotions_by_second = emotion_data.get("emotions_by_second", {})
+    all_emotions = []
+    for second, emotions in emotions_by_second.items():
+        all_emotions.extend(emotions)
+    
+    emotion_counts = Counter(all_emotions) if all_emotions else {}
+    dominant_emotion = emotion_counts.most_common(1)[0][0] if emotion_counts else "unknown"
+    
+    # Get voice characteristics
+    voice_indicators = voice_data.get('emotional_indicators', {})
+    singing_characteristics = voice_data.get('singing_characteristics', {})
+    
+    # Get transcription data
+    transcription_data = voice_data.get('transcription', {})
+    
+    # Build comprehensive prompt
+    prompt = f"""
+You are an expert psychologist and voice analysis specialist. Please analyze the following multimodal data from a 15-second recording session and provide comprehensive insights about the person's emotional state, vocal characteristics, and overall psychological profile.
+
+## FACIAL EMOTION ANALYSIS
+- Dominant Emotion: {dominant_emotion}
+- Emotion Distribution: {dict(emotion_counts)}
+- Total Emotion Detections: {len(all_emotions)}
+- Emotions by Second: {dict(emotions_by_second)}
+
+## VOICE ANALYSIS
+### Basic Characteristics:
+- Mean Pitch: {voice_data.get('mean_pitch', 'N/A')} Hz
+- Voice Type: {voice_data.get('voice_type', 'N/A')}
+- Pitch Range: {voice_data.get('lowest_note', 'N/A')} - {voice_data.get('highest_note', 'N/A')}
+- Vibrato Rate: {voice_data.get('vibrato_rate', 'N/A')} Hz
+- Jitter: {voice_data.get('jitter', 'N/A')}
+- Shimmer: {voice_data.get('shimmer', 'N/A')}
+
+### Singing Characteristics:
+- Singing Style: {singing_characteristics.get('singing_style', 'N/A')}
+- Overall Quality: {singing_characteristics.get('overall_singing_quality', 'N/A')}
+- Pitch Stability: {singing_characteristics.get('pitch_stability', 'N/A')}
+- Vibrato Present: {singing_characteristics.get('vibrato_present', 'N/A')}
+- Vibrato Quality: {singing_characteristics.get('vibrato_quality', 'N/A')}
+
+### Emotional Voice Indicators:
+- Energy Level: {voice_indicators.get('energy_level', 'N/A')}
+- Emotional Arousal: {voice_indicators.get('emotional_arousal', 'N/A')}
+- Voice Tension: {voice_indicators.get('voice_tension', 'N/A')}
+- Voice Quality: {voice_indicators.get('voice_quality', 'N/A')}
+- Speaking Rate: {voice_indicators.get('speaking_rate', 'N/A')}
+- Breath Control: {voice_indicators.get('breath_control', 'N/A')}
+
+## SPEECH TRANSCRIPTION
+- Transcription: "{transcription_data.get('transcription', 'No speech detected')}"
+- Confidence: {transcription_data.get('confidence', 0):.1%}
+- Word Count: {transcription_data.get('word_count', 0)}
+- Success: {transcription_data.get('success', False)}
+
+## ENHANCED EMOTIONAL ANALYSIS
+{emotion_data.get('emotional_analysis', {})}
+
+## FACIAL EXPRESSION QUALITY
+{emotion_data.get('facial_expression_quality', {})}
+
+## EMOTIONAL STABILITY METRICS
+{emotion_data.get('emotional_stability_metrics', {})}
+
+---
+
+Please provide a comprehensive analysis covering:
+
+1. **Overall Emotional State Assessment**: What is the person's primary emotional state and how consistent is it?
+
+2. **Voice-Emotion Alignment**: How well do the facial expressions align with voice characteristics? Are there any discrepancies?
+
+3. **Psychological Insights**: What can you infer about the person's psychological state, stress level, and emotional regulation?
+
+4. **Vocal Characteristics Analysis**: What do the voice parameters tell us about the person's emotional state, confidence, and communication style?
+
+5. **Multimodal Coherence**: How coherent are the different modalities (facial expressions, voice, speech content) in expressing emotion?
+
+6. **Potential Concerns or Strengths**: Are there any indicators of stress, anxiety, confidence, or other psychological factors?
+
+7. **Recommendations**: Based on the analysis, what insights or recommendations would you provide?
+
+Please be thorough, professional, and provide specific evidence from the data to support your conclusions.
+"""
+    
+    return prompt
 
 # ---------- Config ----------
 RECORDING_DURATION = 15  # seconds to record
@@ -167,11 +485,9 @@ def record_video_emotions() -> Dict[str, Any]:
     caffemodel_path = BASE / "RFB-320" / "RFB-320.caffemodel"
     
     if not onnx_path.exists():
-        print(f"[ERROR] Missing ONNX model: {onnx_path}")
-        return {"error": "Missing ONNX model"}
+        raise ModelError(f"Missing ONNX model: {onnx_path}")
     if not proto_path.exists() or not caffemodel_path.exists():
-        print(f"[ERROR] Missing face detector files")
-        return {"error": "Missing face detector files"}
+        raise ModelError(f"Missing face detector files: {proto_path} or {caffemodel_path}")
     
     # Initialize video capture
     cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)  # Windows backend
@@ -179,8 +495,7 @@ def record_video_emotions() -> Dict[str, Any]:
         cap = cv2.VideoCapture(0)  # Try default
     
     if not cap.isOpened():
-        print("[ERROR] Cannot open camera")
-        return {"error": "Cannot open camera"}
+        raise CameraError("Cannot open camera. Please check if camera is connected and not being used by another application.")
     
     frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -303,10 +618,211 @@ def record_video_emotions() -> Dict[str, Any]:
     
     print(f"✅ Video recording complete! ({frame_count} frames)")
     
-    return {
+    # Enhanced emotional analysis for LLM comprehension
+    enhanced_emotion_data = {
         "emotions_by_second": dict(emotions_by_second),
         "duration": RECORDING_DURATION,
-        "frame_count": frame_count
+        "frame_count": frame_count,
+        "emotional_analysis": _analyze_emotional_patterns(emotions_by_second, RECORDING_DURATION),
+        "facial_expression_quality": _assess_facial_expression_quality(emotions_by_second, frame_count),
+        "emotional_stability_metrics": _calculate_emotional_stability_metrics(emotions_by_second, RECORDING_DURATION)
+    }
+    
+    # Store in memory
+    analysis_memory.store_emotion_data(enhanced_emotion_data)
+    
+    return enhanced_emotion_data
+
+def _analyze_emotional_patterns(emotions_by_second: Dict[int, List[str]], duration: int) -> Dict[str, Any]:
+    """Analyze emotional patterns for better LLM comprehension"""
+    try:
+        all_emotions = []
+        for second, emotions in emotions_by_second.items():
+            all_emotions.extend(emotions)
+        
+        if not all_emotions:
+            return {
+                "dominant_emotion": "unknown",
+                "emotion_distribution": {},
+                "emotional_intensity": "unknown",
+                "emotion_transitions": 0,
+                "emotional_consistency": 0.0,
+                "emotional_complexity": "unknown"
+            }
+        
+        emotion_counts = Counter(all_emotions)
+        total_detections = len(all_emotions)
+        dominant_emotion = emotion_counts.most_common(1)[0][0]
+        
+        # Calculate emotion distribution percentages
+        emotion_distribution = {
+            emotion: (count / total_detections) * 100 
+            for emotion, count in emotion_counts.items()
+        }
+        
+        # Calculate emotional intensity based on distribution
+        max_percentage = max(emotion_distribution.values())
+        if max_percentage > 70:
+            emotional_intensity = "high"
+        elif max_percentage > 40:
+            emotional_intensity = "medium"
+        else:
+            emotional_intensity = "low"
+        
+        # Count emotion transitions
+        emotion_transitions = 0
+        prev_emotion = None
+        for second in sorted(emotions_by_second.keys()):
+            if emotions_by_second[second]:
+                curr_emotion = Counter(emotions_by_second[second]).most_common(1)[0][0]
+                if prev_emotion and curr_emotion != prev_emotion:
+                    emotion_transitions += 1
+                prev_emotion = curr_emotion
+        
+        # Calculate emotional consistency
+        emotional_consistency = ((duration - emotion_transitions) / duration) * 100 if duration > 0 else 0
+        
+        # Determine emotional complexity
+        unique_emotions = len(emotion_counts)
+        if unique_emotions == 1:
+            emotional_complexity = "simple"
+        elif unique_emotions <= 3:
+            emotional_complexity = "moderate"
+        else:
+            emotional_complexity = "complex"
+        
+        return {
+            "dominant_emotion": dominant_emotion,
+            "emotion_distribution": emotion_distribution,
+            "emotional_intensity": emotional_intensity,
+            "emotion_transitions": emotion_transitions,
+            "emotional_consistency": emotional_consistency,
+            "emotional_complexity": emotional_complexity,
+            "total_emotion_detections": total_detections,
+            "unique_emotions_detected": unique_emotions
+        }
+        
+    except Exception as e:
+        return {
+            "dominant_emotion": "unknown",
+            "emotion_distribution": {},
+            "emotional_intensity": "unknown",
+            "emotion_transitions": 0,
+            "emotional_consistency": 0.0,
+            "emotional_complexity": "unknown",
+            "error": str(e)
+        }
+
+def _assess_facial_expression_quality(emotions_by_second: Dict[int, List[str]], frame_count: int) -> Dict[str, Any]:
+    """Assess the quality of facial expression detection"""
+    try:
+        total_detections = sum(len(emotions) for emotions in emotions_by_second.values())
+        detection_rate = total_detections / frame_count if frame_count > 0 else 0
+        
+        # Calculate detection consistency
+        seconds_with_detection = len([s for s, emotions in emotions_by_second.items() if emotions])
+        detection_consistency = seconds_with_detection / len(emotions_by_second) if emotions_by_second else 0
+        
+        # Assess quality based on detection metrics
+        if detection_rate > 0.8 and detection_consistency > 0.9:
+            quality_level = "excellent"
+        elif detection_rate > 0.6 and detection_consistency > 0.7:
+            quality_level = "good"
+        elif detection_rate > 0.4 and detection_consistency > 0.5:
+            quality_level = "fair"
+        else:
+            quality_level = "poor"
+        
+        return {
+            "detection_rate": detection_rate,
+            "detection_consistency": detection_consistency,
+            "quality_level": quality_level,
+            "total_detections": total_detections,
+            "seconds_with_detection": seconds_with_detection,
+            "average_detections_per_second": total_detections / len(emotions_by_second) if emotions_by_second else 0
+        }
+        
+    except Exception as e:
+        return {
+            "detection_rate": 0.0,
+            "detection_consistency": 0.0,
+            "quality_level": "unknown",
+            "error": str(e)
+        }
+
+def _calculate_emotional_stability_metrics(emotions_by_second: Dict[int, List[str]], duration: int) -> Dict[str, Any]:
+    """Calculate detailed emotional stability metrics"""
+    try:
+        # Calculate stability over time
+        emotion_changes = 0
+        prev_emotion = None
+        stability_timeline = []
+        
+        for second in sorted(emotions_by_second.keys()):
+            if emotions_by_second[second]:
+                curr_emotion = Counter(emotions_by_second[second]).most_common(1)[0][0]
+                stability_timeline.append(curr_emotion)
+                
+                if prev_emotion and curr_emotion != prev_emotion:
+                    emotion_changes += 1
+                prev_emotion = curr_emotion
+            else:
+                stability_timeline.append("no_detection")
+        
+        # Calculate various stability metrics
+        stability_percentage = ((duration - emotion_changes) / duration) * 100 if duration > 0 else 0
+        
+        # Calculate emotional volatility (how much emotions change)
+        volatility_score = emotion_changes / duration if duration > 0 else 0
+        
+        # Calculate emotional persistence (how long emotions last)
+        emotion_durations = []
+        current_emotion = None
+        current_duration = 0
+        
+        for emotion in stability_timeline:
+            if emotion == current_emotion:
+                current_duration += 1
+            else:
+                if current_emotion and current_emotion != "no_detection":
+                    emotion_durations.append(current_duration)
+                current_emotion = emotion
+                current_duration = 1
+        
+        if current_emotion and current_emotion != "no_detection":
+            emotion_durations.append(current_duration)
+        
+        avg_emotion_duration = np.mean(emotion_durations) if emotion_durations else 0
+        
+        # Determine stability level
+        if stability_percentage > 80 and volatility_score < 0.2:
+            stability_level = "very_stable"
+        elif stability_percentage > 60 and volatility_score < 0.4:
+            stability_level = "stable"
+        elif stability_percentage > 40 and volatility_score < 0.6:
+            stability_level = "moderately_stable"
+        elif stability_percentage > 20 and volatility_score < 0.8:
+            stability_level = "variable"
+        else:
+            stability_level = "highly_variable"
+        
+        return {
+            "stability_percentage": stability_percentage,
+            "volatility_score": volatility_score,
+            "emotion_changes": emotion_changes,
+            "average_emotion_duration": avg_emotion_duration,
+            "stability_level": stability_level,
+            "stability_timeline": stability_timeline
+        }
+        
+    except Exception as e:
+        return {
+            "stability_percentage": 0.0,
+            "volatility_score": 0.0,
+            "emotion_changes": 0,
+            "average_emotion_duration": 0.0,
+            "stability_level": "unknown",
+            "error": str(e)
     }
 
 # ---------- Audio Voice Analysis with Transcription ----------
@@ -334,6 +850,10 @@ def record_audio_analysis_with_transcription() -> Dict[str, Any]:
             transcriber = SpeechTranscriber(credentials_path="credentials.json")
             transcription_results = transcriber.transcribe_audio_data(audio_data, sample_rate=22050)
             
+            # Store voice and transcription data separately in memory
+            analysis_memory.store_voice_data(voice_results)
+            analysis_memory.store_transcription_data(transcription_results)
+            
             # Combine voice analysis and transcription results
             combined_results = {
                 **voice_results,
@@ -346,6 +866,16 @@ def record_audio_analysis_with_transcription() -> Dict[str, Any]:
         except Exception as e:
             print(f"⚠️  Speech transcription failed: {str(e)}")
             print("   Continuing with voice analysis only...")
+            
+            # Store voice data and empty transcription in memory
+            analysis_memory.store_voice_data(voice_results)
+            analysis_memory.store_transcription_data({
+                "transcription": "",
+                "confidence": 0.0,
+                "success": False,
+                "error": str(e),
+                "word_count": 0
+            })
             
             # Return voice analysis without transcription
             return {
@@ -360,8 +890,7 @@ def record_audio_analysis_with_transcription() -> Dict[str, Any]:
             }
         
     except Exception as e:
-        print(f"❌ Audio analysis failed: {str(e)}")
-        return {"error": str(e)}
+        raise AudioError(f"Audio analysis failed: {str(e)}")
 
 # ---------- Combined Analysis ----------
 def format_combined_results(emotion_data: Dict[str, Any], voice_data: Dict[str, Any]):
@@ -455,15 +984,23 @@ def format_combined_results(emotion_data: Dict[str, Any], voice_data: Dict[str, 
         shimmer_level = 'Low' if voice_data['shimmer'] < 0.015 else 'Medium' if voice_data['shimmer'] < 0.025 else 'High'
         print(f"   Shimmer: {voice_data['shimmer']:.3f} ({shimmer_level} variation)")
         
-        dynamics_emoji = {
-            'stable': '🔒',
-            'controlled': '🎯',
-            'variable': '📈',
-            'expressive': '🎭',
-            'highly expressive': '🌟'
-        }
-        print(f"\n🎨 DYNAMICS:")
-        print(f"   Style: {dynamics_emoji.get(voice_data['dynamics'], '🎵')} {voice_data['dynamics'].title()}")
+        # Singing Characteristics
+        if 'singing_characteristics' in voice_data:
+            singing = voice_data['singing_characteristics']
+            print(f"\n🎵 SINGING CHARACTERISTICS:")
+            print(f"   Style: {singing.get('singing_style', 'unknown').title()}")
+            print(f"   Quality: {singing.get('overall_singing_quality', 'unknown').title()}")
+            print(f"   Pitch Stability: {singing.get('pitch_stability', 0):.3f}")
+            print(f"   Vibrato: {'Present' if singing.get('vibrato_present', False) else 'Not detected'}")
+        
+        # Emotional Voice Indicators
+        if 'emotional_indicators' in voice_data:
+            emotional = voice_data['emotional_indicators']
+            print(f"\n🎭 EMOTIONAL VOICE INDICATORS:")
+            print(f"   Energy Level: {emotional.get('energy_level', 'unknown').title()}")
+            print(f"   Emotional Arousal: {emotional.get('emotional_arousal', 'unknown').title()}")
+            print(f"   Voice Tension: {emotional.get('voice_tension', 'unknown').title()}")
+            print(f"   Speaking Rate: {emotional.get('speaking_rate', 'unknown').title()}")
     else:
         print(f"   ❌ Error: {voice_data['error']}")
     
@@ -499,127 +1036,224 @@ def format_combined_results(emotion_data: Dict[str, Any], voice_data: Dict[str, 
         print(f"   Error: {transcription_data.get('error', 'Unknown error')}")
         print(f"   Success: {transcription_data.get('success', False)}")
     
-    # ========== CORRELATION INSIGHTS ==========
+    # ========== GEMINI AI ANALYSIS ==========
     if "error" not in emotion_data and "error" not in voice_data and all_emotions:
         print(f"\n{'='*70}")
-        print("🔗 MULTIMODAL INSIGHTS")
+        print("🤖 GEMINI AI COMPREHENSIVE ANALYSIS")
         print(f"{'='*70}")
         
-        # Analyze correlation between emotion and voice dynamics
-        voice_dynamics = voice_data.get('dynamics', 'stable')
-        
-        print(f"\n💭 OBSERVATIONS:")
-        
-        # Match emotions with voice characteristics
-        if dominant_emotion == "happiness" and voice_data['vibrato_rate'] > 5:
-            print(f"   • Happy emotional state matches expressive voice quality")
-        elif dominant_emotion in ["sadness", "neutral"] and voice_dynamics in ["stable", "controlled"]:
-            print(f"   • Calm emotional state aligns with controlled voice dynamics")
-        elif dominant_emotion in ["anger", "surprise"] and voice_dynamics in ["expressive", "highly expressive"]:
-            print(f"   • Intense emotions correlate with dynamic voice expression")
-        
-        # Pitch and emotion correlation
-        if voice_data['mean_pitch'] > 250 and dominant_emotion in ["happiness", "surprise"]:
-            print(f"   • Higher pitch frequency matches positive/excited emotions")
-        elif voice_data['mean_pitch'] < 200 and dominant_emotion in ["sadness", "anger", "neutral"]:
-            print(f"   • Lower pitch frequency aligns with subdued emotions")
-        
-        # Stability analysis
-        if stability_percentage > 70 and voice_dynamics in ["stable", "controlled"]:
-            print(f"   • Consistent emotional and vocal presentation")
-        elif stability_percentage < 50 and voice_dynamics in ["expressive", "highly expressive"]:
-            print(f"   • Variable emotions match expressive vocal style")
-        
-        # Speech content analysis
-        if transcription_data.get("success", False):
-            transcript = transcription_data['transcription'].lower()
-            word_count = transcription_data['word_count']
+        try:
+            print("\n🔄 Generating AI-powered analysis...")
+            print("   This may take a few moments...")
             
-            print(f"\n🗣️  SPEECH CONTENT ANALYSIS:")
-            print(f"   • Spoke {word_count} words in {RECORDING_DURATION} seconds")
-            print(f"   • Speaking rate: {word_count / RECORDING_DURATION:.1f} words/second")
+            # Get Gemini analysis
+            gemini_response = get_gemini_analysis(emotion_data, voice_data)
             
-            # Analyze emotional content in speech
-            positive_words = ['happy', 'good', 'great', 'wonderful', 'amazing', 'excellent', 'fantastic']
-            negative_words = ['sad', 'bad', 'terrible', 'awful', 'horrible', 'disappointed', 'angry']
+            print(f"\n📊 GEMINI AI ANALYSIS RESULTS:")
+            print("="*70)
+            print(gemini_response)
+            print("="*70)
             
-            positive_count = sum(1 for word in positive_words if word in transcript)
-            negative_count = sum(1 for word in negative_words if word in transcript)
-            
-            if positive_count > negative_count:
-                print(f"   • Speech content appears positive ({positive_count} positive words)")
-            elif negative_count > positive_count:
-                print(f"   • Speech content appears negative ({negative_count} negative words)")
-            else:
-                print(f"   • Speech content appears neutral")
-        
-        print(f"\n   Overall: Your facial expressions, voice characteristics, and speech content")
-        print(f"   show {'strong alignment' if stability_percentage > 60 else 'dynamic variation'}")
+        except GeminiError as e:
+            print(f"\n❌ GEMINI AI ERROR: {str(e)}")
+            print("\n💡 To enable AI-powered analysis:")
+            print("   1. Install: pip install google-generativeai")
+            print("   2. Set up API key (see GEMINI_SETUP.md)")
+            print("   3. Check internet connection")
+            print("   4. Restart the application")
+            print("\n   Basic analysis results are still available above.")
+            # Don't raise the exception here, just show the error and continue
     
     print("\n" + "="*70)
     print("Analysis complete! 🎉")
     print("="*70)
+    
+    # Generate and save JSON output for LLM integration
+    generate_json_output()
+
+def generate_json_output():
+    """Generate comprehensive JSON output for LLM integration"""
+    try:
+        # Get complete analysis data
+        complete_analysis = analysis_memory.get_complete_analysis()
+        
+        # Create output filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_filename = f"multimodal_analysis_{timestamp}.json"
+        
+        # Save to file
+        with open(output_filename, 'w', encoding='utf-8') as f:
+            json.dump(complete_analysis, f, indent=2, ensure_ascii=False)
+        
+        print(f"\n📄 JSON output saved to: {output_filename}")
+        print("   This file contains all analysis data for LLM integration")
+        
+        # Display summary for user
+        print(f"\n📊 ANALYSIS SUMMARY FOR LLM:")
+        print(f"   Session ID: {complete_analysis['metadata']['session_id']}")
+        print(f"   Status: {complete_analysis['metadata']['status']}")
+        
+        if 'multimodal_insights' in complete_analysis:
+            insights = complete_analysis['multimodal_insights']
+            print(f"   Overall Emotional State: {insights.get('overall_emotional_state', 'unknown')}")
+            print(f"   Confidence Score: {insights.get('confidence_score', 0):.2f}")
+            print(f"   Emotional Coherence: {insights.get('emotional_coherence', 'unknown')}")
+            print(f"   Voice-Emotion Alignment: {insights.get('voice_emotion_alignment', 'unknown')}")
+        
+        return output_filename
+        
+    except Exception as e:
+        print(f"❌ Error generating JSON output: {str(e)}")
+        return None
 
 # ---------- Main Function ----------
 def run_multimodal_analysis():
     """
     Run simultaneous video and audio recording with analysis and transcription
     """
-    print("\n" + "="*70)
-    print("      🎭🎤📝 MULTIMODAL EMOTION, VOICE & SPEECH ANALYSIS 📝🎤🎭")
-    print("="*70)
-    print("\nThis tool will simultaneously:")
-    print("  • Record video for 15 seconds and detect facial emotions")
-    print("  • Record audio for 15 seconds and analyze voice characteristics")
-    print("  • Transcribe your speech using Google Speech-to-Text")
-    print("  • Provide comprehensive multimodal analysis")
-    print("\nMake sure your webcam and microphone are ready!")
-    print("="*70)
-    
-    input("\nPress ENTER to start recording...")
-    
-    print("\n" + "="*70)
-    print("🎬 STARTING MULTIMODAL RECORDING...")
-    print("="*70)
-    print("Recording will start in 3 seconds...")
-    for i in range(3, 0, -1):
-        print(f"{i}...")
-        time.sleep(1)
-    print("🔴 RECORDING NOW!\n")
-    
-    # Storage for results
-    emotion_results = {}
-    voice_results = {}
-    
-    # Run video recording in main thread (needs GUI)
-    # Run audio recording with transcription in separate thread
-    audio_thread = threading.Thread(target=lambda: voice_results.update(record_audio_analysis_with_transcription()))
-    
-    # Start audio thread
-    audio_thread.start()
-    
-    # Run video in main thread (OpenCV needs main thread for GUI)
-    emotion_results = record_video_emotions()
-    
-    # Wait for audio thread to complete
-    audio_thread.join()
-    
-    print("\n" + "="*70)
-    print("📊 Processing and analyzing results...")
-    print("="*70)
-    
-    # Display combined results
-    format_combined_results(emotion_results, voice_results)
-
-if __name__ == "__main__":
     try:
-        run_multimodal_analysis()
+        # Reset memory for new session
+        global analysis_memory
+        analysis_memory = AnalysisMemory()
+        
+        print("\n" + "="*70)
+        print("      🎭🎤📝 MULTIMODAL EMOTION, VOICE & SPEECH ANALYSIS 📝🎤🎭")
+        print("="*70)
+        print("\nThis tool will simultaneously:")
+        print("  • Record video for 15 seconds and detect facial emotions")
+        print("  • Record audio for 15 seconds and analyze voice characteristics")
+        print("  • Transcribe your speech using Google Speech-to-Text")
+        print("  • Provide comprehensive multimodal analysis")
+        print("  • Generate AI-powered insights using Google Gemini")
+        print("  • Generate JSON output for LLM integration")
+        print("\nMake sure your webcam and microphone are ready!")
+        print("="*70)
+        
+        input("\nPress ENTER to start recording...")
+        
+        print("\n" + "="*70)
+        print("🎬 STARTING MULTIMODAL RECORDING...")
+        print("="*70)
+        print("Recording will start in 3 seconds...")
+        for i in range(3, 0, -1):
+            print(f"{i}...")
+            time.sleep(1)
+        print("🔴 RECORDING NOW!\n")
+        
+        # Storage for results
+        emotion_results = {}
+        voice_results = {}
+        audio_error = None
+        
+        # Run video recording in main thread (needs GUI)
+        # Run audio recording with transcription in separate thread
+        def audio_worker():
+            nonlocal voice_results, audio_error
+            try:
+                voice_results.update(record_audio_analysis_with_transcription())
+            except Exception as e:
+                audio_error = e
+        
+        audio_thread = threading.Thread(target=audio_worker)
+        
+        # Start audio thread
+        audio_thread.start()
+        
+        # Run video in main thread (OpenCV needs main thread for GUI)
+        try:
+            emotion_results = record_video_emotions()
+        except Exception as e:
+            print(f"\n❌ Video recording failed: {str(e)}")
+            raise
+        
+        # Wait for audio thread to complete
+        audio_thread.join()
+        
+        # Check if audio thread had errors
+        if audio_error:
+            print(f"\n❌ Audio recording failed: {str(audio_error)}")
+            raise audio_error
+        
+        print("\n" + "="*70)
+        print("📊 Processing and analyzing results...")
+        print("="*70)
+        
+        # Display combined results
+        format_combined_results(emotion_results, voice_results)
+        
+    except CameraError as e:
+        print(f"\n❌ CAMERA ERROR: {str(e)}")
+        print("\n💡 Troubleshooting steps:")
+        print("   • Check if camera is connected")
+        print("   • Close other applications using the camera")
+        print("   • Check camera permissions")
+        print("   • Try restarting the application")
+        sys.exit(1)
+        
+    except ModelError as e:
+        print(f"\n❌ MODEL ERROR: {str(e)}")
+        print("\n💡 Troubleshooting steps:")
+        print("   • Ensure emotion-ferplus-8.onnx is in the project directory")
+        print("   • Ensure RFB-320 folder with .prototxt and .caffemodel files exists")
+        print("   • Check file permissions")
+        sys.exit(1)
+        
+    except AudioError as e:
+        print(f"\n❌ AUDIO ERROR: {str(e)}")
+        print("\n💡 Troubleshooting steps:")
+        print("   • Check if microphone is connected and working")
+        print("   • Check microphone permissions")
+        print("   • Close other applications using the microphone")
+        print("   • Try speaking louder and closer to the microphone")
+        sys.exit(1)
+        
+    except GeminiError as e:
+        print(f"\n❌ GEMINI AI ERROR: {str(e)}")
+        print("\n💡 Troubleshooting steps:")
+        print("   • Install: pip install google-generativeai")
+        print("   • Set up API key (see GEMINI_SETUP.md)")
+        print("   • Check internet connection")
+        print("   • Verify API key is valid")
+        sys.exit(1)
+        
+    except TranscriptionError as e:
+        print(f"\n❌ TRANSCRIPTION ERROR: {str(e)}")
+        print("\n💡 Troubleshooting steps:")
+        print("   • Check Google Cloud credentials")
+        print("   • Verify internet connection")
+        print("   • Check microphone quality")
+        print("   • Try speaking more clearly")
+        sys.exit(1)
+        
+    except (VoiceAnalysisError, InsufficientDataError, AudioQualityError) as e:
+        print(f"\n❌ VOICE ANALYSIS ERROR: {str(e)}")
+        print("\n💡 Troubleshooting steps:")
+        print("   • Check audio quality")
+        print("   • Try speaking louder")
+        print("   • Ensure minimal background noise")
+        print("   • Try a longer recording")
+        print("   • Check microphone connection and permissions")
+        sys.exit(1)
+        
+    except MultimodalAnalysisError as e:
+        print(f"\n❌ ANALYSIS ERROR: {str(e)}")
+        print("\n💡 Please check the error message above for specific guidance.")
+        sys.exit(1)
+        
     except KeyboardInterrupt:
         print("\n\n❌ Analysis interrupted by user.")
+        print("👋 Thank you for using Multimodal Analysis Tool!")
+        sys.exit(0)
+        
     except Exception as e:
-        print(f"\n❌ Error: {str(e)}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        print("\n👋 Thank you for using Multimodal Analysis Tool!")
+        print(f"\n❌ UNEXPECTED ERROR: {str(e)}")
+        print("\n💡 This is an unexpected error. Please:")
+        print("   • Check all dependencies are installed")
+        print("   • Verify all required files are present")
+        print("   • Try restarting the application")
+        print("   • Contact support if the issue persists")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    run_multimodal_analysis()
 

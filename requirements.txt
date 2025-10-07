@@ -20,6 +20,9 @@ onnxruntime>=1.10.0
 google-cloud-speech>=2.21.0
 google-cloud-storage>=2.10.0
 
+# Google Generative AI (Gemini)
+google-generativeai>=0.3.0
+
 # Data handling
 pathlib2>=2.3.0; python_version < "3.4"
 
