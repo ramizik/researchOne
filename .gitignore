@@ -6,3 +6,4 @@ infer2-test.avi
 credentials.json
 __pycache__/
 multimodal-output.avi
+.env

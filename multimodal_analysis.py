@@ -71,7 +71,7 @@ class AnalysisMemory:
         self.analysis_metadata = {
             "session_id": self.session_id,
             "timestamp": datetime.now().isoformat(),
-            "recording_duration": RECORDING_DURATION,
+            "recording_duration": 15,
             "analysis_version": "2.0",
             "status": "in_progress"
         }
@@ -231,7 +231,7 @@ def get_gemini_analysis(emotion_data: Dict[str, Any], voice_data: Dict[str, Any]
         configure_gemini()
         
         # Create the model
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         
         # Format the data for Gemini
         analysis_prompt = format_data_for_gemini(emotion_data, voice_data)
