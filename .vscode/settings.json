@@ -1,0 +1,25 @@
+{
+    "problems.visibility": true,
+    "editor.fontFamily": "Fira Code",
+    "editor.fontWeight": "800",
+    "editor.fontLigatures": "'calt', 'ss01', 'ss02', 'ss03', 'ss04', 'ss05', 'ss06', 'zero', 'onum'",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+        "source.fixAll.eslint": "explicit",
+        "source.organizeImports": "always"
+    },
+    "files.autoSave": "afterDelay",
+    "files.autoSaveDelay": 1000,
+    "files.trimTrailingWhitespace": true,
+    "files.trimFinalNewlines": true,
+    "editor.wordWrap": "on",
+    "editor.bracketPairColorization.enabled": true,
+    "editor.guides.bracketPairs": "active",
+    "git.autofetch": true,
+    "terminal.integrated.fontSize": 14,
+    "terminal.integrated.cursorBlinking": true,
+    "workbench.editor.enablePreview": false,
+    "workbench.startupEditor": "none",
+    "explorer.compactFolders": false,
+    "breadcrumbs.enabled": true
+    }
