@@ -72,6 +72,8 @@ pip install -r requirements.txt
 
 ### Usage
 
+### CLI Mode (Command Line Interface)
+
 ```bash
 # Run complete multimodal analysis
 python multimodal_analysis.py
@@ -80,6 +82,27 @@ python multimodal_analysis.py
 python voice_analyzer.py
 python expression_ssd_detect.py
 ```
+
+### API Mode (REST API Server)
+
+```bash
+# Start the REST API server
+python start_api.py
+
+# Or use the startup scripts
+# Windows:
+start_api.bat
+
+# Linux/Mac:
+./start_api.sh
+```
+
+The API server will start on http://localhost:8000
+
+- **API Documentation**: http://localhost:8000/api/docs
+- **Alternative Docs**: http://localhost:8000/api/redoc
+
+See [API_README.md](API_README.md) for complete API documentation and usage examples.
 
 ## Error Handling
 
@@ -110,14 +133,19 @@ The system generates:
 
 ```
 multimodal-analysis/
-├── multimodal_analysis.py      # Main application
+├── multimodal_analysis.py      # Main CLI application
 ├── voice_analyzer.py           # Voice analysis module
 ├── speech_transcriber.py       # Speech transcription
 ├── expression_ssd_detect.py    # Emotion detection
-├── requirements.txt            # Dependencies
-├── environment.yml             # Conda environment
-├── documentation/              # Setup guides
-└── model files/               # Required AI models
+├── api_server.py              # REST API server (FastAPI)
+├── analysis_engine.py         # Analysis engine wrapper for API
+├── start_api.py               # API startup script
+├── test_api_client.py         # API test client
+├── requirements.txt           # Dependencies
+├── environment.yml            # Conda environment
+├── API_README.md              # API documentation
+├── documentation/             # Setup guides
+└── model files/              # Required AI models
 ```
 
 ## Requirements

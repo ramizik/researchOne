@@ -6,3 +6,13 @@ credentials.json
 __pycache__/
 multimodal-output.avi
 .env
+
+# API Server temporary files
+*.webm
+*.wav
+*.mp4
+/tmp/
+/temp/
+
+# JSON outputs
+multimodal_analysis_*.json
